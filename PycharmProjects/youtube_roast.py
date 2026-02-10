@@ -10,10 +10,10 @@ from email.message import EmailMessage
 
 # ====== CONFIG IA (opcional) ======
 USE_AI = True
-OPENAI_API_KEY = "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"
+OPENAI_API_KEY = "XXXXXXXXXXXXXXXX-7i9QEgWxXU8i0i7ib3BLtxNlE40siZ_WqxnGFV2arxtHp6dBZSxIe9Ku2IZZp0T3BlbkFJ6-VKs7SMLiFSIGf9Tdp7r0KGDja802W1-sLyqvIl8Zl78Ww5Wm-2wO1OjEHfHoNL9kbewHu50A"
 # ====== EMAIL CONFIG ======
 SENDER_EMAIL = "pilarlb99@gmail.com"
-APP_PASSWORD = "xjrg ggyu dwhe hljw"   # contraseña de aplicación (no tu password normal)
+APP_PASSWORD = "xjrg ggyu dwhe XXX"   # contraseña de aplicación (no tu password normal)
 
 # ====== LIMPIEZA TITULO ======
 def clean_title(title):
