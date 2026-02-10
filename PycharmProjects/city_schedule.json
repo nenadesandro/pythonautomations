@@ -1,0 +1,34 @@
+{
+  "cities": {
+    "Barcelona": {
+      "regular_hours": {
+        "monday": ["08:00", "18:00"],
+        "tuesday": ["08:00", "18:00"],
+        "wednesday": ["08:00", "18:00"],
+        "thursday": ["08:00", "18:00"],
+        "friday": ["08:00", "18:00"]
+      },
+      "exceptions": []
+    },
+    "Madrid": {
+      "regular_hours": {
+        "monday": ["07:00", "19:00"],
+        "tuesday": ["07:00", "19:00"],
+        "wednesday": ["07:00", "19:00"],
+        "thursday": ["07:00", "19:00"],
+        "friday": ["07:00", "19:00"]
+      },
+      "exceptions": []
+    },
+    "Valencia": {
+      "regular_hours": {
+        "monday": ["09:00", "17:00"],
+        "tuesday": ["09:00", "17:00"],
+        "wednesday": ["09:00", "17:00"],
+        "thursday": ["09:00", "17:00"],
+        "friday": ["09:00", "17:00"]
+      },
+      "exceptions": []
+    }
+  }
+}
