@@ -1,0 +1,16 @@
+SELECT 
+    u.Location,
+    COUNT(p.Id) AS Total_Posts,
+    SUM(p.Score) AS Total_Score,
+    AVG(p.Score) AS Avg_Score,
+    SUM(p.ViewCount) AS Total_Views,
+    AVG(p.ViewCount) AS Avg_Views,
+    SUM(p.FavoriteCount) AS Total_Favorites,
+    SUM(p.AnswerCount) AS Total_Answers
+FROM Posts p
+INNER JOIN Users u 
+    ON p.OwnerUserId = u.Id
+WHERE u.Location IS NOT NULL
+GROUP BY u.Location
+HAVING COUNT(p.Id) > 10  
+ORDER BY Total_Posts DESC;
