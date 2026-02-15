@@ -6,7 +6,7 @@ from datetime import datetime
 import requests
 
 SCHEDULE_FILE = "city_schedule.json"
-WEATHER_API_KEY = "8181250368da60c03257ac4abc0fea59"
+WEATHER_API_KEY = "XXXXXXXXXXXXXX"
 
 # ------------------ STYLE ------------------
 BG_COLOR = "#ffe6f0"
