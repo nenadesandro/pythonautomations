@@ -13,8 +13,7 @@ USE_AI = True
 OPENAI_API_KEY = "MY_API_KEY"
 # ====== EMAIL CONFIG ======
 SENDER_EMAIL = "pilarlb99@gmail.com"
-APP_PASSWORD = "xjrg ggyu dwhe XXX"   # contraseña de aplicación (no tu password normal)
-
+APP_PASSWORD = "my_password"
 # ====== LIMPIEZA TITULO ======
 def clean_title(title):
     title = str(title)
