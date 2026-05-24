@@ -1,0 +1,524 @@
+/* ============================================================
+   BLOCK 1 — GENERAL OVERVIEW
+   ============================================================ */
+
+-- 1.1 Active vs Deleted posts volume
+SELECT 
+    CASE WHEN DeletionDate IS NOT NULL THEN 'Deleted' ELSE 'Active' END AS Status,
+    COUNT(*)                                                              AS TotalPosts,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2)                   AS Percentage
+FROM PostsWithDeleted
+GROUP BY CASE WHEN DeletionDate IS NOT NULL THEN 'Deleted' ELSE 'Active' END;
+
+-- 1.2 Deleted posts by post type (Question, Answer, Wiki, etc.)
+SELECT 
+    pt.Name                AS PostType,
+    COUNT(*)               AS DeletedCount,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS Percentage
+FROM PostsWithDeleted pwd
+JOIN PostTypes pt ON pwd.PostTypeId = pt.Id
+WHERE pwd.DeletionDate IS NOT NULL
+GROUP BY pt.Name
+ORDER BY DeletedCount DESC;
+
+-- 1.3 Average time to deletion in days, by post type
+SELECT 
+    pt.Name                                                              AS PostType,
+    AVG(DATEDIFF(day, pwd.CreationDate, pwd.DeletionDate))              AS AvgDaysToDelete,
+    MIN(DATEDIFF(day, pwd.CreationDate, pwd.DeletionDate))              AS MinDays,
+    MAX(DATEDIFF(day, pwd.CreationDate, pwd.DeletionDate))              AS MaxDays,
+    COUNT(*)                                                             AS TotalDeleted
+FROM PostsWithDeleted pwd
+JOIN PostTypes pt ON pwd.PostTypeId = pt.Id
+WHERE pwd.DeletionDate IS NOT NULL
+  AND pwd.CreationDate IS NOT NULL
+GROUP BY pt.Name
+ORDER BY AvgDaysToDelete;
+
+-- 1.4 Posts deleted within 1 hour (spam / bot indicator)
+SELECT 
+    COUNT(*)                                                             AS FastDeletedPosts,
+    ROUND(
+        COUNT(*) * 100.0 / 
+        (SELECT COUNT(*) FROM PostsWithDeleted WHERE DeletionDate IS NOT NULL), 2
+    )                                                                    AS PctOfAllDeleted
+FROM PostsWithDeleted
+WHERE DeletionDate IS NOT NULL
+  AND DATEDIFF(minute, CreationDate, DeletionDate) < 60;
+
+-- 1.5 Closed-then-deleted pipeline: avg days from close to deletion
+SELECT 
+    COUNT(*)                                                             AS TotalClosedThenDeleted,
+    AVG(DATEDIFF(day, ClosedDate, DeletionDate))                        AS AvgDaysClosedToDeleted,
+    MIN(DATEDIFF(day, ClosedDate, DeletionDate))                        AS MinDays,
+    MAX(DATEDIFF(day, ClosedDate, DeletionDate))                        AS MaxDays
+FROM PostsWithDeleted
+WHERE DeletionDate IS NOT NULL
+  AND ClosedDate   IS NOT NULL
+  AND DeletionDate >= ClosedDate;
+
+
+/* ============================================================
+   BLOCK 2 — COUNTRY ANALYSIS
+   ============================================================ */
+
+-- 2.1 Top 30 countries by deleted post count
+SELECT TOP 30
+    TRIM(u.Location)                                                     AS Country,
+    COUNT(*)                                                             AS DeletedPosts,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2)                   AS PctOfAllDeleted
+FROM PostsWithDeleted pwd
+JOIN Users u ON pwd.OwnerUserId = u.Id
+WHERE pwd.DeletionDate IS NOT NULL
+  AND u.Location IS NOT NULL
+  AND u.Location  <> ''
+GROUP BY TRIM(u.Location)
+ORDER BY DeletedPosts DESC;
+
+-- 2.2 Deletion rate per country (deleted / total posts) — min 20 posts
+SELECT 
+    TRIM(u.Location)                                                     AS Country,
+    COUNT(*)                                                             AS TotalPosts,
+    SUM(CASE WHEN pwd.DeletionDate IS NOT NULL THEN 1 ELSE 0 END)       AS DeletedPosts,
+    ROUND(
+        SUM(CASE WHEN pwd.DeletionDate IS NOT NULL THEN 1 ELSE 0 END) 
+        * 100.0 / COUNT(*), 2
+    )                                                                    AS DeletionRate_Pct
+FROM PostsWithDeleted pwd
+JOIN Users u ON pwd.OwnerUserId = u.Id
+WHERE u.Location IS NOT NULL
+  AND u.Location  <> ''
+GROUP BY TRIM(u.Location)
+HAVING COUNT(*) >= 20
+ORDER BY DeletionRate_Pct DESC;
+
+-- 2.3 Average score of deleted vs active posts per country
+SELECT 
+    TRIM(u.Location)                                                     AS Country,
+    ROUND(AVG(CASE WHEN pwd.DeletionDate IS NOT NULL 
+                   THEN CAST(pwd.Score AS FLOAT) END), 2)               AS AvgScore_Deleted,
+    ROUND(AVG(CASE WHEN pwd.DeletionDate IS NULL 
+                   THEN CAST(pwd.Score AS FLOAT) END), 2)               AS AvgScore_Active
+FROM PostsWithDeleted pwd
+JOIN Users u ON pwd.OwnerUserId = u.Id
+WHERE u.Location IS NOT NULL
+  AND u.Location  <> ''
+GROUP BY TRIM(u.Location)
+HAVING COUNT(*) >= 20
+ORDER BY AvgScore_Deleted ASC;
+
+-- 2.4 Posts with no location (anonymous / potential spam accounts)
+SELECT 
+    SUM(CASE WHEN u.Location IS NULL OR u.Location = '' THEN 1 ELSE 0 END) AS NoLocation_Deleted,
+    SUM(CASE WHEN u.Location IS NOT NULL AND u.Location <> '' THEN 1 ELSE 0 END) AS WithLocation_Deleted,
+    ROUND(
+        SUM(CASE WHEN u.Location IS NULL OR u.Location = '' THEN 1 ELSE 0 END) 
+        * 100.0 / COUNT(*), 2
+    )                                                                    AS PctNoLocation
+FROM PostsWithDeleted pwd
+JOIN Users u ON pwd.OwnerUserId = u.Id
+WHERE pwd.DeletionDate IS NOT NULL;
+
+
+/* ============================================================
+   BLOCK 3 — FLAGS AND CLOSE REASONS
+   ============================================================ */
+
+-- 3.1 Flag type distribution on deleted posts
+SELECT 
+    ft.Name                                                              AS FlagType,
+    COUNT(*)                                                             AS FlagCount,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2)                   AS Percentage
+FROM PendingFlags pf
+JOIN FlagTypes ft ON pf.FlagTypeId = ft.Id
+JOIN PostsWithDeleted pwd ON pf.PostId = pwd.Id
+WHERE pwd.DeletionDate IS NOT NULL
+GROUP BY ft.Name
+ORDER BY FlagCount DESC;
+
+-- 3.2 Close reasons on deleted posts
+SELECT 
+    crt.Name                                                             AS CloseReason,
+    COUNT(*)                                                             AS Count,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2)                   AS Percentage
+FROM PendingFlags pf
+JOIN CloseReasonTypes crt ON pf.CloseReasonTypeId = crt.Id
+JOIN PostsWithDeleted pwd ON pf.PostId = pwd.Id
+WHERE pwd.DeletionDate IS NOT NULL
+  AND pf.CloseReasonTypeId IS NOT NULL
+GROUP BY crt.Name
+ORDER BY Count DESC;
+
+-- 3.3 Off-topic close reasons on deleted posts
+SELECT 
+    caot.InputTitle                                                      AS OffTopicReason,
+    COUNT(*)                                                             AS Count,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2)                   AS Percentage
+FROM PendingFlags pf
+JOIN CloseAsOffTopicReasonTypes caot ON pf.CloseAsOffTopicReasonTypeId = caot.Id
+JOIN PostsWithDeleted pwd ON pf.PostId = pwd.Id
+WHERE pwd.DeletionDate IS NOT NULL
+  AND pf.CloseAsOffTopicReasonTypeId IS NOT NULL
+GROUP BY caot.InputTitle
+ORDER BY Count DESC;
+
+-- 3.4 Country + close reason combination (key pattern detector)
+SELECT TOP 50
+    TRIM(u.Location)                                                     AS Country,
+    crt.Name                                                             AS CloseReason,
+    COUNT(*)                                                             AS Count
+FROM PendingFlags pf
+JOIN CloseReasonTypes crt   ON pf.CloseReasonTypeId = crt.Id
+JOIN PostsWithDeleted pwd   ON pf.PostId = pwd.Id
+JOIN Users u                ON pwd.OwnerUserId = u.Id
+WHERE pwd.DeletionDate IS NOT NULL
+  AND u.Location IS NOT NULL AND u.Location <> ''
+  AND pf.CloseReasonTypeId IS NOT NULL
+GROUP BY TRIM(u.Location), crt.Name
+ORDER BY Count DESC;
+
+-- 3.5 Country + flag type combination
+SELECT TOP 50
+    TRIM(u.Location)                                                     AS Country,
+    ft.Name                                                              AS FlagType,
+    COUNT(*)                                                             AS Count
+FROM PendingFlags pf
+JOIN FlagTypes ft            ON pf.FlagTypeId = ft.Id
+JOIN PostsWithDeleted pwd    ON pf.PostId = pwd.Id
+JOIN Users u                 ON pwd.OwnerUserId = u.Id
+WHERE pwd.DeletionDate IS NOT NULL
+  AND u.Location IS NOT NULL AND u.Location <> ''
+GROUP BY TRIM(u.Location), ft.Name
+ORDER BY Count DESC;
+
+
+/* ============================================================
+   BLOCK 4 — TEMPORAL PATTERNS
+   ============================================================ */
+
+-- 4.1 Deleted posts by year and month (historical trend)
+SELECT 
+    YEAR(DeletionDate)                                                   AS Year,
+    MONTH(DeletionDate)                                                  AS Month,
+    COUNT(*)                                                             AS DeletedPosts
+FROM PostsWithDeleted
+WHERE DeletionDate IS NOT NULL
+GROUP BY YEAR(DeletionDate), MONTH(DeletionDate)
+ORDER BY Year, Month;
+
+-- 4.2 Deleted posts by day of the week
+SELECT 
+    DATENAME(WEEKDAY, DeletionDate)                                      AS DayOfWeek,
+    COUNT(*)                                                             AS DeletedCount
+FROM PostsWithDeleted
+WHERE DeletionDate IS NOT NULL
+GROUP BY DATENAME(WEEKDAY, DeletionDate)
+ORDER BY DeletedCount DESC;
+
+-- 4.3 Deleted posts by hour of the day
+SELECT 
+    DATEPART(HOUR, DeletionDate)                                         AS HourOfDay,
+    COUNT(*)                                                             AS DeletedCount
+FROM PostsWithDeleted
+WHERE DeletionDate IS NOT NULL
+GROUP BY DATEPART(HOUR, DeletionDate)
+ORDER BY HourOfDay;
+
+-- 4.4 Deletion trend per year — absolute + YoY growth rate
+WITH YearlyDeleted AS (
+    SELECT 
+        YEAR(DeletionDate)   AS Year,
+        COUNT(*)             AS DeletedPosts
+    FROM PostsWithDeleted
+    WHERE DeletionDate IS NOT NULL
+    GROUP BY YEAR(DeletionDate)
+)
+SELECT 
+    Year,
+    DeletedPosts,
+    LAG(DeletedPosts) OVER (ORDER BY Year)                               AS PrevYearPosts,
+    ROUND(
+        (DeletedPosts - LAG(DeletedPosts) OVER (ORDER BY Year)) 
+        * 100.0 / NULLIF(LAG(DeletedPosts) OVER (ORDER BY Year), 0), 2
+    )                                                                    AS YoY_Growth_Pct
+FROM YearlyDeleted
+ORDER BY Year;
+
+
+/* ============================================================
+   BLOCK 5 — USER PROFILE ANALYSIS
+   ============================================================ */
+
+-- 5.1 Avg reputation: users with deleted posts vs without
+SELECT 
+    CASE WHEN d.deleted_count > 0 
+         THEN 'Has Deleted Posts' 
+         ELSE 'No Deleted Posts' END                                     AS UserType,
+    COUNT(DISTINCT u.Id)                                                 AS UserCount,
+    AVG(u.Reputation)                                                    AS AvgReputation,
+    AVG(u.DownVotes)                                                     AS AvgDownVotes,
+    AVG(u.UpVotes)                                                       AS AvgUpVotes,
+    AVG(u.Views)                                                         AS AvgProfileViews
+FROM Users u
+LEFT JOIN (
+    SELECT OwnerUserId, COUNT(*) AS deleted_count
+    FROM PostsWithDeleted
+    WHERE DeletionDate IS NOT NULL AND OwnerUserId IS NOT NULL
+    GROUP BY OwnerUserId
+) d ON u.Id = d.OwnerUserId
+GROUP BY CASE WHEN d.deleted_count > 0 
+              THEN 'Has Deleted Posts' 
+              ELSE 'No Deleted Posts' END;
+
+-- 5.2 Top 20 users with most deleted posts (spam / abuse candidates)
+SELECT TOP 20
+    u.Id                                                                 AS UserId,
+    u.DisplayName,
+    TRIM(u.Location)                                                     AS Country,
+    u.Reputation,
+    u.CreationDate                                                       AS AccountCreated,
+    u.LastAccessDate                                                     AS LastAccess,
+    COUNT(*)                                                             AS DeletedPostCount
+FROM PostsWithDeleted pwd
+JOIN Users u ON pwd.OwnerUserId = u.Id
+WHERE pwd.DeletionDate IS NOT NULL
+GROUP BY u.Id, u.DisplayName, u.Location, u.Reputation,
+         u.CreationDate, u.LastAccessDate
+ORDER BY DeletedPostCount DESC;
+
+-- 5.3 User retention after having a post deleted (do they come back?)
+SELECT 
+    u.Id                                                                 AS UserId,
+    u.DisplayName,
+    TRIM(u.Location)                                                     AS Country,
+    COUNT(*)                                                             AS TotalPosts,
+    SUM(CASE WHEN pwd.DeletionDate IS NOT NULL THEN 1 ELSE 0 END)       AS DeletedPosts,
+    MIN(pwd.CreationDate)                                                AS FirstPost,
+    MAX(pwd.CreationDate)                                                AS LastPost,
+    u.LastAccessDate                                                     AS LastAccountAccess,
+    DATEDIFF(day, 
+        MAX(CASE WHEN pwd.DeletionDate IS NOT NULL 
+                 THEN pwd.DeletionDate END), 
+        u.LastAccessDate)                                                AS DaysActiveAfterLastDelete
+FROM PostsWithDeleted pwd
+JOIN Users u ON pwd.OwnerUserId = u.Id
+GROUP BY u.Id, u.DisplayName, u.Location, u.LastAccessDate
+HAVING SUM(CASE WHEN pwd.DeletionDate IS NOT NULL THEN 1 ELSE 0 END) >= 3
+ORDER BY DeletedPosts DESC;
+
+-- 5.4 Deletion rate by user reputation bucket
+SELECT 
+    CASE 
+        WHEN u.Reputation < 10      THEN '0-9 (New)'
+        WHEN u.Reputation < 100     THEN '10-99'
+        WHEN u.Reputation < 500     THEN '100-499'
+        WHEN u.Reputation < 1000    THEN '500-999'
+        WHEN u.Reputation < 5000    THEN '1000-4999'
+        ELSE '5000+ (Power User)'
+    END                                                                  AS ReputationBucket,
+    COUNT(*)                                                             AS TotalPosts,
+    SUM(CASE WHEN pwd.DeletionDate IS NOT NULL THEN 1 ELSE 0 END)       AS DeletedPosts,
+    ROUND(
+        SUM(CASE WHEN pwd.DeletionDate IS NOT NULL THEN 1 ELSE 0 END) 
+        * 100.0 / COUNT(*), 2
+    )                                                                    AS DeletionRate_Pct
+FROM PostsWithDeleted pwd
+JOIN Users u ON pwd.OwnerUserId = u.Id
+GROUP BY 
+    CASE 
+        WHEN u.Reputation < 10      THEN '0-9 (New)'
+        WHEN u.Reputation < 100     THEN '10-99'
+        WHEN u.Reputation < 500     THEN '100-499'
+        WHEN u.Reputation < 1000    THEN '500-999'
+        WHEN u.Reputation < 5000    THEN '1000-4999'
+        ELSE '5000+ (Power User)'
+    END
+ORDER BY DeletionRate_Pct DESC;
+
+
+/* ============================================================
+   BLOCK 6 — TAG ANALYSIS
+   ============================================================ */
+
+-- 6.1 Tags with highest deletion rate (most problematic topics)
+SELECT TOP 30
+    t.TagName,
+    COUNT(*)                                                             AS TotalTaggedPosts,
+    SUM(CASE WHEN pwd.DeletionDate IS NOT NULL THEN 1 ELSE 0 END)       AS DeletedPosts,
+    ROUND(
+        SUM(CASE WHEN pwd.DeletionDate IS NOT NULL THEN 1 ELSE 0 END) 
+        * 100.0 / COUNT(*), 2
+    )                                                                    AS DeletionRate_Pct
+FROM PostTags ptags
+JOIN PostsWithDeleted pwd ON ptags.PostId = pwd.Id
+JOIN Tags t               ON ptags.TagId  = t.Id
+GROUP BY t.TagName
+HAVING COUNT(*) >= 50
+ORDER BY DeletionRate_Pct DESC;
+
+-- 6.2 Most common tags in deleted posts
+SELECT TOP 30
+    t.TagName,
+    COUNT(*)                                                             AS AppearancesInDeletedPosts
+FROM PostTags ptags
+JOIN PostsWithDeleted pwd ON ptags.PostId = pwd.Id
+JOIN Tags t               ON ptags.TagId  = t.Id
+WHERE pwd.DeletionDate IS NOT NULL
+GROUP BY t.TagName
+ORDER BY AppearancesInDeletedPosts DESC;
+
+-- 6.3 Country + top tags in deleted posts
+SELECT TOP 50
+    TRIM(u.Location)                                                     AS Country,
+    t.TagName,
+    COUNT(*)                                                             AS DeletedCount
+FROM PostsWithDeleted pwd
+JOIN PostTags ptags       ON pwd.Id        = ptags.PostId
+JOIN Tags t               ON ptags.TagId   = t.Id
+JOIN Users u              ON pwd.OwnerUserId = u.Id
+WHERE pwd.DeletionDate IS NOT NULL
+  AND u.Location IS NOT NULL AND u.Location <> ''
+GROUP BY TRIM(u.Location), t.TagName
+ORDER BY DeletedCount DESC;
+
+
+/* ============================================================
+   BLOCK 7 — REVIEW TASKS AND REJECTION REASONS
+   ============================================================ */
+
+-- 7.1 Review outcome for posts that ended up deleted
+SELECT 
+    rtt.Name                                                             AS ReviewResult,
+    COUNT(*)                                                             AS Count,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2)                   AS Percentage
+FROM ReviewTaskResults rtr
+JOIN ReviewTaskResultTypes rtt ON rtr.ReviewTaskResultTypeId = rtt.Id
+JOIN ReviewTasks rt            ON rtr.ReviewTaskId = rt.Id
+JOIN PostsWithDeleted pwd      ON rt.PostId = pwd.Id
+WHERE pwd.DeletionDate IS NOT NULL
+GROUP BY rtt.Name
+ORDER BY Count DESC;
+
+-- 7.2 Rejection reasons for deleted posts
+SELECT 
+    rrr.Name                                                             AS RejectionReason,
+    COUNT(*)                                                             AS Count,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2)                   AS Percentage
+FROM ReviewTaskResults rtr
+JOIN ReviewRejectionReasons rrr ON rtr.RejectionReasonId = rrr.Id
+JOIN ReviewTasks rt             ON rtr.ReviewTaskId = rt.Id
+JOIN PostsWithDeleted pwd       ON rt.PostId = pwd.Id
+WHERE pwd.DeletionDate IS NOT NULL
+  AND rtr.RejectionReasonId IS NOT NULL
+GROUP BY rrr.Name
+ORDER BY Count DESC;
+
+-- 7.3 Review task types that led to deletion
+SELECT 
+    rtyp.Name                                                            AS ReviewTaskType,
+    COUNT(DISTINCT pwd.Id)                                               AS DeletedPostsReviewed
+FROM ReviewTasks rt
+JOIN ReviewTaskTypes rtyp ON rt.ReviewTaskTypeId = rtyp.Id
+JOIN PostsWithDeleted pwd ON rt.PostId = pwd.Id
+WHERE pwd.DeletionDate IS NOT NULL
+GROUP BY rtyp.Name
+ORDER BY DeletedPostsReviewed DESC;
+
+-- 7.4 Country + rejection reason combination
+SELECT TOP 30
+    TRIM(u.Location)                                                     AS Country,
+    rrr.Name                                                             AS RejectionReason,
+    COUNT(*)                                                             AS Count
+FROM ReviewTaskResults rtr
+JOIN ReviewRejectionReasons rrr ON rtr.RejectionReasonId = rrr.Id
+JOIN ReviewTasks rt             ON rtr.ReviewTaskId = rt.Id
+JOIN PostsWithDeleted pwd       ON rt.PostId = pwd.Id
+JOIN Users u                    ON pwd.OwnerUserId = u.Id
+WHERE pwd.DeletionDate IS NOT NULL
+  AND rtr.RejectionReasonId IS NOT NULL
+  AND u.Location IS NOT NULL AND u.Location <> ''
+GROUP BY TRIM(u.Location), rrr.Name
+ORDER BY Count DESC;
+
+
+/* ============================================================
+   BLOCK 8 — POST HISTORY: WHO DELETED THE POST?
+   ============================================================ */
+
+-- 8.1 Deletion actor type (moderator, owner, system) via PostHistory
+SELECT 
+    pht.Name                                                             AS HistoryActionType,
+    COUNT(*)                                                             AS Count,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2)                   AS Percentage
+FROM PostHistory ph
+JOIN PostHistoryTypes pht ON ph.PostHistoryTypeId = pht.Id
+JOIN PostsWithDeleted pwd ON ph.PostId = pwd.Id
+WHERE pwd.DeletionDate IS NOT NULL
+  AND pht.Name LIKE '%Delet%'
+GROUP BY pht.Name
+ORDER BY Count DESC;
+
+-- 8.2 Country + deletion actor breakdown
+SELECT TOP 30
+    TRIM(u.Location)                                                     AS Country,
+    pht.Name                                                             AS DeletionAction,
+    COUNT(*)                                                             AS Count
+FROM PostHistory ph
+JOIN PostHistoryTypes pht ON ph.PostHistoryTypeId = pht.Id
+JOIN PostsWithDeleted pwd ON ph.PostId = pwd.Id
+JOIN Users u              ON pwd.OwnerUserId = u.Id
+WHERE pwd.DeletionDate IS NOT NULL
+  AND pht.Name LIKE '%Delet%'
+  AND u.Location IS NOT NULL AND u.Location <> ''
+GROUP BY TRIM(u.Location), pht.Name
+ORDER BY Count DESC;
+
+
+/* ============================================================
+   BLOCK 9 — SCORE AND VOTES ON DELETED POSTS
+   ============================================================ */
+
+-- 9.1 Score distribution buckets for deleted posts
+SELECT 
+    CASE 
+        WHEN pwd.Score <= -5    THEN 'Very Negative (<= -5)'
+        WHEN pwd.Score < 0      THEN 'Negative (-1 to -4)'
+        WHEN pwd.Score = 0      THEN 'Zero (0)'
+        WHEN pwd.Score <= 5     THEN 'Low Positive (1-5)'
+        ELSE 'High Positive (6+)'
+    END                                                                  AS ScoreBucket,
+    COUNT(*)                                                             AS DeletedPosts,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2)                   AS Percentage
+FROM PostsWithDeleted pwd
+WHERE pwd.DeletionDate IS NOT NULL
+GROUP BY 
+    CASE 
+        WHEN pwd.Score <= -5    THEN 'Very Negative (<= -5)'
+        WHEN pwd.Score < 0      THEN 'Negative (-1 to -4)'
+        WHEN pwd.Score = 0      THEN 'Zero (0)'
+        WHEN pwd.Score <= 5     THEN 'Low Positive (1-5)'
+        ELSE 'High Positive (6+)'
+    END
+ORDER BY DeletedPosts DESC;
+
+-- 9.2 Vote type breakdown on deleted posts
+SELECT 
+    vt.Name                                                              AS VoteType,
+    COUNT(*)                                                             AS VoteCount
+FROM Votes v
+JOIN VoteTypes vt         ON v.VoteTypeId = vt.Id
+JOIN PostsWithDeleted pwd ON v.PostId     = pwd.Id
+WHERE pwd.DeletionDate IS NOT NULL
+GROUP BY vt.Name
+ORDER BY VoteCount DESC;
+
+-- 9.3 Avg votes and score on deleted posts vs active posts
+SELECT 
+    CASE WHEN pwd.DeletionDate IS NOT NULL THEN 'Deleted' ELSE 'Active' END AS Status,
+    COUNT(DISTINCT pwd.Id)                                               AS TotalPosts,
+    ROUND(AVG(CAST(pwd.Score AS FLOAT)), 2)                             AS AvgScore,
+    ROUND(AVG(CAST(pwd.CommentCount AS FLOAT)), 2)                      AS AvgComments,
+    ROUND(AVG(CAST(pwd.ViewCount AS FLOAT)), 2)                         AS AvgViews,
+    ROUND(AVG(CAST(pwd.FavoriteCount AS FLOAT)), 2)                     AS AvgFavorites
+FROM PostsWithDeleted pwd
+GROUP BY CASE WHEN pwd.DeletionDate IS NOT NULL THEN 'Deleted' ELSE 'Active' END;
